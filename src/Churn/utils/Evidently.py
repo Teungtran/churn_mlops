@@ -35,12 +35,14 @@ def get_data_drift(reference_df, df, column_mapping, output_dir: str = "plots"):
     drift_score = drift_summary.get("dataset_drift", None)
     n_drifted_features = drift_summary.get("number_of_drifted_features", 0)
     total_features = drift_summary.get("number_of_features", 0)
-
-    mlflow.log_metric("drift_score", float(drift_score))
+    drift_ratio = n_drifted_features / total_features
+    mlflow.log_metric("drift_score", drift_score)
+    mlflow.log_metric("drift_ratio", drift_ratio)
     mlflow.log_metric("drifted_features", n_drifted_features)
     mlflow.log_metric("total_features", total_features)
     result = {
         "drift_score": drift_score,
+        "drift_ratio": drift_ratio,
         "n_drifted_features": n_drifted_features,
         "total_features": total_features
     }

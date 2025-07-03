@@ -54,3 +54,8 @@ class MLFlowConfig:
     tracking_uri: str
     experiment_name: str
     prediction_experiment_name: str
+    
+@dataclass(frozen=True)
+class ThresholdConfig:
+    confidence_threshold: float
+    data_drift_threshold: float

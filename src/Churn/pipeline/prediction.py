@@ -82,15 +82,15 @@ class PredictionPipeline:
         df_copy.drop(columns=["customer_id","Customer_Name"],axis=1,inplace=True)
         df_features_encode = get_dummies(df_copy)
         return df_features_encode
-    async def predict(self, reference_data: str):
+    async def predict(self, reference_data: Optional[str] = None):
         try:
             start_time = time.time()
             start_datetime = datetime.now()
             time_str = start_datetime.strftime('%Y%m%dT%H%M%S')
-            
             config_manager = ConfigurationManager()
             data_ingestion_config = config_manager.get_data_ingestion_config()
             mlflow_config = config_manager.get_mlflow_config()
+            threshold_config = config_manager.get_threshold_config()
             dagshub.init(
             repo_owner="Teungtran",
             repo_name="churn_mlops",
@@ -100,15 +100,24 @@ class PredictionPipeline:
             mlflow.set_experiment(mlflow_config.prediction_experiment_name)  
             with mlflow.start_run(run_name=f"prediction_run_{time_str}"):
                 data_ingestion = DataIngestion(config=data_ingestion_config)
-                
                 df = data_ingestion.load_data()
                 df_features = self.process_data_for_churn(df)
                 df_encoded = self.encode_churn(df_features)
-                reference_df = pd.read_csv(reference_data)
-                column_mapings = get_column_mapping(df_features)
-                drift_result = get_data_drift(reference_df, df_features, column_mapings)
-                drift_score = drift_result.get("drift_score", False)
-                n_drifted_features = drift_result.get("n_drifted_features", 0)            
+                drift_ratio = 0
+                n_drifted_features = 0
+
+                if reference_data:
+                    try:
+                        reference_df = pd.read_csv(reference_data)
+                        column_mapings = get_column_mapping(df_features)
+                        drift_result = get_data_drift(reference_df, df_features, column_mapings)
+                        drift_ratio = drift_result.get("drift_ratio", 0)
+                        n_drifted_features = drift_result.get("n_drifted_features", 0)
+                    except Exception as e:
+                        logger.warning(f"Skipping data drift due to error: {e}")
+                else:
+                    logger.info("No reference data provided. Skipping data drift detection.")      
+
                 X = self.scaler.transform(df_encoded)
                 y_pred = self.model.predict(X)
                 df_features['Churn_RATE'] = y_pred
@@ -153,17 +162,19 @@ class PredictionPipeline:
                 mlflow.log_param("rawdata_records", len(df))
                 mlflow.log_metric("records_processed", len(df_encoded))
                 message = ""
-
-                if drift_score:
-                    message += (
-                        f"⚠️ Data drift detected in {n_drifted_features} feature(s). "
-                        "Consider retraining the model.\n"
-                    )
+                if reference_data:
+                    DRIFTED_FEATURE_THRESHOLD = threshold_config.data_drift_threshold
+                    if drift_ratio > DRIFTED_FEATURE_THRESHOLD:
+                        message += (
+                            f"⚠️ Data drift detected in {n_drifted_features} feature(s) "
+                            f"({drift_ratio:.0%} of all features). Consider retraining the model.\n"
+                        )
+                    else:
+                        message += f"No significant data drift detected ({drift_ratio:.0%} of features).\n"
                 else:
-                    message += "✅ No significant data drift detected.\n"
+                    message = ""
 
-                # Confidence Message
-                CONFIDENCE_THRESHOLD = 0.7
+                CONFIDENCE_THRESHOLD = threshold_config.confidence_threshold
                 if average_confidence is not None:
                     mlflow.log_metric("average_prediction_confidence", average_confidence)
 
@@ -191,7 +202,7 @@ async def run_prediction_task(
     model_version: str,
     scaler_version: str,
     run_id: str,
-    reference_data: str
+    reference_data: Optional[str] = None
 ):
     """
     Background task to run prediction pipeline

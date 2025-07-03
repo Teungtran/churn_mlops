@@ -12,7 +12,8 @@ from src.Churn.entity.config_entity import (
     TrainingConfig,
     EvaluationConfig,
     CloudStoragePushConfig,
-    MLFlowConfig
+    MLFlowConfig,
+    ThresholdConfig
 )
 from pathlib import Path
 # Initialize the _env_loaded variable
@@ -135,3 +136,14 @@ class ConfigurationManager:
         logger.info(f"Cloud Storage Push config: {config}")
         return cloud_storage_push_config
     
+    def get_threshold_config(self) -> ThresholdConfig:
+        config = self.config.prediction_threshold
+
+        threshold_config = ThresholdConfig(
+            confidence_threshold=config.confidence_threshold,
+            data_drift_threshold=config.data_drift_threshold
+
+        )
+
+        logger.info(f"MLFlow configuration: {threshold_config}")
+        return threshold_config
