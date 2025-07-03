@@ -49,7 +49,8 @@ class ConfigurationManager:
             dagshub_username=config.dagshub_username,
             dagshub_repo_name=config.dagshub_repo_name,
             tracking_uri=config.tracking_uri,
-            experiment_name=base_experiment_name
+            experiment_name=base_experiment_name,
+            prediction_experiment_name=config.prediction_experiment_name
         )
 
         logger.info(f"MLFlow configuration: {mlflow_config}")

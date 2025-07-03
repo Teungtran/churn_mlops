@@ -6,8 +6,8 @@ from src.Churn.entity.config_entity import DataIngestionConfig
 from pathlib import Path
 from datetime import datetime
 from .support import most_common,get_dummies
-from sklearn.model_selection import train_test_split
 from imblearn.combine import SMOTEENN
+ 
 class DataIngestion:
     def __init__(self, config: DataIngestionConfig):
         self.config = config

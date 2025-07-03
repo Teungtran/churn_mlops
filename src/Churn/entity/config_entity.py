@@ -53,3 +53,4 @@ class MLFlowConfig:
     dagshub_repo_name: str
     tracking_uri: str
     experiment_name: str
+    prediction_experiment_name: str

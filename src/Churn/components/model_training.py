@@ -14,7 +14,6 @@ from sklearn.metrics import (
 )
 from pathlib import Path
 import mlflow
-from mlflow import register_model
 import mlflow.sklearn
 from src.Churn.utils.logging import logger
 from src.Churn.entity.config_entity import TrainingConfig, EvaluationConfig

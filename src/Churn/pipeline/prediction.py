@@ -11,6 +11,8 @@ import mlflow
 from src.Churn.utils.logging import logger
 from src.Churn.utils.notify_webhook import post_to_webhook
 from src.Churn.utils.visualize_ouput import visualize_customer_churn
+from src.Churn.utils.Evidently import get_column_mapping,get_data_drift
+
 from datetime import datetime
 import time
 import os
@@ -36,9 +38,9 @@ async def send_webhook_payload(
     except Exception as e:
         logger.error(f"Webhook notification failed with unexpected error: {str(e)}")
 class PredictionPipeline:
-    def __init__(self, model_uri: str, scaler_uri: str):
-        mlflow.set_tracking_uri("https://dagshub.com/Teungtran/churn_mlops.mlflow")
-
+    def __init__(self, model_uri: str, scaler_uri: str,):
+        pass
+    
         try:
             self.model = mlflow.pyfunc.load_model(model_uri)
             scaler_path = mlflow.artifacts.download_artifacts(artifact_uri=scaler_uri)
@@ -80,7 +82,7 @@ class PredictionPipeline:
         df_copy.drop(columns=["customer_id","Customer_Name"],axis=1,inplace=True)
         df_features_encode = get_dummies(df_copy)
         return df_features_encode
-    async def predict(self):
+    async def predict(self, reference_data: str):
         try:
             start_time = time.time()
             start_datetime = datetime.now()
@@ -88,21 +90,26 @@ class PredictionPipeline:
             
             config_manager = ConfigurationManager()
             data_ingestion_config = config_manager.get_data_ingestion_config()
+            mlflow_config = config_manager.get_mlflow_config()
             dagshub.init(
             repo_owner="Teungtran",
             repo_name="churn_mlops",
             mlflow=True
         )
-            mlflow.set_tracking_uri("https://dagshub.com/Teungtran/churn_mlops.mlflow")
-            mlflow.set_experiment("Churn_model_prediction_cycle")  
+            mlflow.set_tracking_uri(mlflow_config.tracking_uri)
+            mlflow.set_experiment(mlflow_config.prediction_experiment_name)  
             with mlflow.start_run(run_name=f"prediction_run_{time_str}"):
                 data_ingestion = DataIngestion(config=data_ingestion_config)
                 
                 df = data_ingestion.load_data()
                 df_features = self.process_data_for_churn(df)
                 df_encoded = self.encode_churn(df_features)
+                reference_df = pd.read_csv(reference_data)
+                column_mapings = get_column_mapping(df_features)
+                drift_result = get_data_drift(reference_df, df_features, column_mapings)
+                drift_score = drift_result.get("drift_score", False)
+                n_drifted_features = drift_result.get("n_drifted_features", 0)            
                 X = self.scaler.transform(df_encoded)
-
                 y_pred = self.model.predict(X)
                 df_features['Churn_RATE'] = y_pred
                 counts = df_features['Churn_RATE'].value_counts()
@@ -145,25 +152,34 @@ class PredictionPipeline:
                 mlflow.log_param("end_time", end_datetime.strftime('%Y-%m-%d %H:%M:%S'))
                 mlflow.log_param("rawdata_records", len(df))
                 mlflow.log_metric("records_processed", len(df_encoded))
-                
                 message = ""
+
+                if drift_score:
+                    message += (
+                        f"⚠️ Data drift detected in {n_drifted_features} feature(s). "
+                        "Consider retraining the model.\n"
+                    )
+                else:
+                    message += "✅ No significant data drift detected.\n"
+
+                # Confidence Message
                 CONFIDENCE_THRESHOLD = 0.7
                 if average_confidence is not None:
                     mlflow.log_metric("average_prediction_confidence", average_confidence)
-                    
+
                     if average_confidence < CONFIDENCE_THRESHOLD:
-                        message = (
+                        message += (
                             f"⚠️ Average prediction confidence ({average_confidence:.2%}) is below the threshold "
                             f"of {CONFIDENCE_THRESHOLD:.2%}. Consider retraining the model."
                         )
                     else:
-                        message = (
-                            f"Average prediction confidence ({average_confidence:.2%}) is above the threshold "
+                        message += (
+                            f"✅ Average prediction confidence ({average_confidence:.2%}) is above the threshold "
                             f"of {CONFIDENCE_THRESHOLD:.2%}. No further action required."
                         )
-                    
+
                     await send_webhook_payload(message=message, avg_confidence=average_confidence)
-                
+
                 mlflow.log_text(message, "prediction_summary.txt")
             return message
 
@@ -175,16 +191,16 @@ async def run_prediction_task(
     model_version: str,
     scaler_version: str,
     run_id: str,
-    model_name: str = "RandomForestClassifier",
+    reference_data: str
 ):
     """
     Background task to run prediction pipeline
     """
     try:
-        model_uri = f"models:/{model_name}/{model_version}"
+        model_uri = f"models:/RandomForestClassifier/{model_version}"
         scaler_uri = f"runs:/{run_id}/{scaler_version}"
         pipeline = PredictionPipeline(model_uri, scaler_uri)
-        message = await pipeline.predict()
+        message = await pipeline.predict(reference_data=reference_data) 
 
         if os.path.exists(file_path):
             try:
@@ -208,7 +224,7 @@ class ChurnController:
         model_version: str = Form(default="1"),
         scaler_version: str = Form(default="scaler_churn_version_20250701T105905.pkl"),
         run_id: str = Form(default="b523ba441ea0465085716dcebb916294"),
-        model_name: str = Form(default="RandomForestClassifier"),
+        reference_data: Optional[str] = Form(default=None),
     ):
         """
         Predict churn using uploaded file and dynamic model/scaler versions.
@@ -222,14 +238,13 @@ class ChurnController:
 
         try:
             await import_data(file)
-
             background_tasks.add_task(
                 run_prediction_task,
                 file_path=input_file_path,
                 model_version=model_version,
                 scaler_version=scaler_version,
                 run_id=run_id,
-                model_name=model_name
+                reference_data=reference_data
             )
             
             message = "Prediction task started in background. Results will be saved to experiment 'Churn_model_prediction_cycle' in https://dagshub.com/Teungtran/churn_mlops.mlflow, check your webhook for status "

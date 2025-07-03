@@ -15,7 +15,7 @@ python-box==7.1.1
 fastapi==0.103.1
 uvicorn==0.23.2
 python-multipart==0.0.6
-mlflow==2.7.1
+mlflow==2.2.2
 chardet==5.2.0 
 dagshub
 dvc
@@ -24,3 +24,5 @@ typing_extensions
 pathlib
 botocore
 concurrent.futures
+evidently>=0.4.11
+s3fs 
