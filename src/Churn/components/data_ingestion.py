@@ -68,17 +68,22 @@ class DataIngestion:
         except Exception as e:
             logger.error(f"Error while loading data: {e}")
             raise
-    def save_data(self, df, df_processed):
+    def save_data(self, df, df_processed, df_features):
             input_data_versioned_name = f"input_raw_data_version_{self.datetime_suffix}.csv"
+            features_data_versioned_name = f"features_data_version_{self.datetime_suffix}.csv"
             processed_data_versioned_name = f"processed_data_version_{self.datetime_suffix}.csv"
             input_data_versioned_path = Path(self.config.data_version_dir) / input_data_versioned_name
-            processed_data_versioned_name = Path(self.config.data_version_dir) / processed_data_versioned_name
+            processed_data_versioned_name = Path(self.config.data_version_dir) / processed_data_versioned_name            
+            features_data_versioned_name = Path(self.config.data_version_dir) / features_data_versioned_name
             if not input_data_versioned_path.exists():
                 df.to_csv(input_data_versioned_path, index=False)
             if not processed_data_versioned_name.exists():
                 df_processed.to_csv(processed_data_versioned_name, index=False)
+            if not features_data_versioned_name.exists():
+                df_features.to_csv(features_data_versioned_name, index=False)
                 logger.info(f"Created versioned input data file: {input_data_versioned_path}")
                 logger.info(f"Created versioned processed data file: {processed_data_versioned_name}")
+                logger.info(f"Created versioned features data file: {features_data_versioned_name}")
             else:
                 logger.info(f"Versioned file already exists: {input_data_versioned_path}, skipping save.")
                 logger.info("Continuing with local processing...")
@@ -87,12 +92,12 @@ class DataIngestion:
         logger.info(f"Starting preprocessing of {len(df_clean)} rows...")
         logger.info(f"Initial columns: {list(df_clean.columns)}")
         
-        df_processed = self.process_data_for_churn(df_clean)
-        logger.info(f"After feature engineering columns: {list(df_processed.columns)}")
-        logger.info(f"Data shape after feature engineering: {df_processed.shape}")
-        logger.info(f"First few rows of feature engineered data: \n{df_processed.head()}")
+        df_features= self.process_data_for_churn(df_clean)
+        logger.info(f"After feature engineering columns: {list(df_features.columns)}")
+        logger.info(f"Data shape after feature engineering: {df_features.shape}")
+        logger.info(f"First few rows of feature engineered data: \n{df_features.head()}")
         
-        df_processed = self.encode_churn(df_processed)
+        df_processed = self.encode_churn(df_features)
         logger.info(f"After encoding columns: {list(df_processed.columns)}")
         logger.info(f"Data shape after encoding: {df_processed.shape}")
         
@@ -139,7 +144,7 @@ class DataIngestion:
         else:
             logger.info("Target variable is balanced. Skipping SMOTEENN.")
             X_res, y_res = X, y
-        return X_res, y_res,df_processed
+        return X_res, y_res,df_processed,df_features
 
     def split_data(self, X_res, y_res):
         """Split data into training and testing sets."""
@@ -154,8 +159,8 @@ class DataIngestion:
         """Main method to perform data ingestion."""
         logger.info("Initiating data ingestion")
         df = self.load_data()
-        X, y, df_processed = self.preprocess_data(df)
-        self.save_data(df, df_processed)
+        X, y, df_processed, df_features = self.preprocess_data(df)
+        self.save_data(df, df_processed, df_features)
         X_train, X_test, y_train, y_test = self.split_data(X, y)
         
         logger.info("Data ingestion completed successfully")

@@ -11,7 +11,6 @@ import mlflow
 from src.Churn.utils.logging import logger
 from src.Churn.utils.notify_webhook import post_to_webhook
 from src.Churn.utils.visualize_ouput import visualize_customer_churn
-from src.Churn.utils.Evidently import get_column_mapping,get_data_drift
 
 from datetime import datetime
 import time
@@ -75,14 +74,16 @@ class PredictionPipeline:
         df_features['LastPurchaseDate'] = df_features['LastPurchaseDate'].dt.date
         df_features['Avg_Spend_Per_Purchase'] = df_features['TotalSpent']/df_features['Frequency'].replace(0,1)
         df_features['Purchase_Consistency'] = df_features['Recency'] / df_features['Frequency'].replace(0, 1)
-        df_features.drop(columns=["LastPurchaseDate"],axis=1,inplace=True)
         return df_features
     def encode_churn(self, df_features):
+        """
+        Encode categorical features using one-hot encoding.
+        Assumes customer_id and Customer_Name have already been dropped.
+        """
         df_copy = df_features.copy()
-        df_copy.drop(columns=["customer_id","Customer_Name"],axis=1,inplace=True)
         df_features_encode = get_dummies(df_copy)
         return df_features_encode
-    async def predict(self, reference_data: Optional[str] = None):
+    async def predict(self):
         try:
             start_time = time.time()
             start_datetime = datetime.now()
@@ -91,9 +92,10 @@ class PredictionPipeline:
             data_ingestion_config = config_manager.get_data_ingestion_config()
             mlflow_config = config_manager.get_mlflow_config()
             threshold_config = config_manager.get_threshold_config()
+            
             dagshub.init(
-            repo_owner="Teungtran",
-            repo_name="churn_mlops",
+            repo_owner=mlflow_config.dagshub_username,
+            repo_name=mlflow_config.dagshub_repo_name,
             mlflow=True
         )
             mlflow.set_tracking_uri(mlflow_config.tracking_uri)
@@ -102,24 +104,23 @@ class PredictionPipeline:
                 data_ingestion = DataIngestion(config=data_ingestion_config)
                 df = data_ingestion.load_data()
                 df_features = self.process_data_for_churn(df)
-                df_encoded = self.encode_churn(df_features)
-                drift_ratio = 0
-                n_drifted_features = 0
-
-                if reference_data:
-                    try:
-                        reference_df = pd.read_csv(reference_data)
-                        column_mapings = get_column_mapping(df_features)
-                        drift_result = get_data_drift(reference_df, df_features, column_mapings)
-                        drift_ratio = drift_result.get("drift_ratio", 0)
-                        n_drifted_features = drift_result.get("n_drifted_features", 0)
-                    except Exception as e:
-                        logger.warning(f"Skipping data drift due to error: {e}")
-                else:
-                    logger.info("No reference data provided. Skipping data drift detection.")      
-
+                df_features_for_prediction = df_features.copy()
+                columns_to_drop = []
+                if "customer_id" in df_features_for_prediction.columns:
+                    columns_to_drop.append("customer_id")
+                if "LastPurchaseDate" in df_features_for_prediction.columns:
+                    columns_to_drop.append("LastPurchaseDate")
+                if "Customer_Name" in df_features_for_prediction.columns:
+                    columns_to_drop.append("Customer_Name")
+                
+                if columns_to_drop:
+                    logger.info(f"Dropping columns for prediction: {columns_to_drop}")
+                    df_features_for_prediction.drop(columns=columns_to_drop, inplace=True)
+                df_encoded = self.encode_churn(df_features_for_prediction)
                 X = self.scaler.transform(df_encoded)
                 y_pred = self.model.predict(X)
+                
+                # Add predictions back to the original df_features
                 df_features['Churn_RATE'] = y_pred
                 counts = df_features['Churn_RATE'].value_counts()
                 count_churn = counts.get(1, 0)
@@ -161,19 +162,7 @@ class PredictionPipeline:
                 mlflow.log_param("end_time", end_datetime.strftime('%Y-%m-%d %H:%M:%S'))
                 mlflow.log_param("rawdata_records", len(df))
                 mlflow.log_metric("records_processed", len(df_encoded))
-                message = ""
-                if reference_data:
-                    DRIFTED_FEATURE_THRESHOLD = threshold_config.data_drift_threshold
-                    if drift_ratio > DRIFTED_FEATURE_THRESHOLD:
-                        message += (
-                            f"⚠️ Data drift detected in {n_drifted_features} feature(s) "
-                            f"({drift_ratio:.0%} of all features). Consider retraining the model.\n"
-                        )
-                    else:
-                        message += f"No significant data drift detected ({drift_ratio:.0%} of features).\n"
-                else:
-                    message = ""
-
+                
                 CONFIDENCE_THRESHOLD = threshold_config.confidence_threshold
                 if average_confidence is not None:
                     mlflow.log_metric("average_prediction_confidence", average_confidence)
@@ -202,7 +191,6 @@ async def run_prediction_task(
     model_version: str,
     scaler_version: str,
     run_id: str,
-    reference_data: Optional[str] = None
 ):
     """
     Background task to run prediction pipeline
@@ -211,7 +199,7 @@ async def run_prediction_task(
         model_uri = f"models:/RandomForestClassifier/{model_version}"
         scaler_uri = f"runs:/{run_id}/{scaler_version}"
         pipeline = PredictionPipeline(model_uri, scaler_uri)
-        message = await pipeline.predict(reference_data=reference_data) 
+        message = await pipeline.predict() 
 
         if os.path.exists(file_path):
             try:
@@ -234,9 +222,8 @@ class ChurnController:
         file: UploadFile,
         model_version: str = Form(default="1"),
         scaler_version: str = Form(default="scaler_churn_version_20250701T105905.pkl"),
-        run_id: str = Form(default="b523ba441ea0465085716dcebb916294"),
-        reference_data: Optional[str] = Form(default=None),
-    ):
+        run_id: str = Form(default="b523ba441ea0465085716dcebb916294")
+        ):
         """
         Predict churn using uploaded file and dynamic model/scaler versions.
         """
@@ -254,9 +241,8 @@ class ChurnController:
                 file_path=input_file_path,
                 model_version=model_version,
                 scaler_version=scaler_version,
-                run_id=run_id,
-                reference_data=reference_data
-            )
+                run_id=run_id
+                )
             
             message = "Prediction task started in background. Results will be saved to experiment 'Churn_model_prediction_cycle' in https://dagshub.com/Teungtran/churn_mlops.mlflow, check your webhook for status "
             

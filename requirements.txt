@@ -24,5 +24,4 @@ typing_extensions
 pathlib
 botocore
 concurrent.futures
-evidently>=0.4.11
 s3fs 

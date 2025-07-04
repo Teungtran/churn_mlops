@@ -36,4 +36,4 @@ async def root():
     return {"message": "Welcome to the Churn Prediction API. Use /docs to view the API documentation."}
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8888, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8800, reload=True)
