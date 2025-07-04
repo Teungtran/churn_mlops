@@ -3,6 +3,7 @@ from src.Churn.utils.logging import logger
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import os
+from pydantic import BaseSettings
 
 from src.Churn.entity.config_entity import (
     DataIngestionConfig,
@@ -30,8 +31,13 @@ class CloudConfig(BaseModel):
     region_name: str = Field(default_factory=lambda: (ensure_env_loaded(), os.getenv("AWS_REGION"))[1])
 
 
-class WebhookConfig(BaseModel):
-    url: str = Field(default_factory=lambda: (ensure_env_loaded(), os.getenv("WEB_HOOK"))[1])
+
+class WebhookConfig(BaseSettings):
+    url: str = Field(..., env="WEB_HOOK")
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
 
     
 class ConfigurationManager:

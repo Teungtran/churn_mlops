@@ -1,32 +1,43 @@
-from typing import Dict
-
+from typing import Dict, Any, Optional, Union
 import httpx
 
 from .logging import logger
 
 
-HEADERS_JSON: Dict[str, str] = {"x-api-key": "X-API_KEY", "Content-Type": "application/json"}
+HEADERS_JSON: Dict[str, str] = {"Content-Type": "application/json"}
 
 
-async def post_to_webhook(webhook_url: str, WEBHOOK_PAYLOAD: Dict, headers: Dict[str, str] = HEADERS_JSON) -> bool:
+async def post_to_webhook(
+    webhook_url: str, 
+    WEBHOOK_PAYLOAD: Dict, 
+    headers: Optional[Dict[str, str]] = None
+) -> Union[httpx.Response, None]:
     """
-    Post a notification to the webhook if the input is valid.
-
-    Raises:
-        Exception: If posting to the webhook fails.
+    Posts a payload to a webhook URL.
 
     Returns:
-        True if the webhook is notified successfully.
+        The HTTP response object on success.
+        None on failure.
+
+    Raises:
+        Exception: If an exception occurs during the request.
     """
+    headers = headers or HEADERS_JSON
 
     async with httpx.AsyncClient(timeout=10) as client:
         try:
+            logger.info(f"Posting to webhook: {webhook_url} with payload: {WEBHOOK_PAYLOAD}")
             response = await client.post(webhook_url, json=WEBHOOK_PAYLOAD, headers=headers)
+
+            logger.info(f"Webhook response status: {response.status_code}, body: {response.text}")
+
             if response.status_code in (200, 201):
-                logger.info(f"Background task completed and webhook sent. Payload: {WEBHOOK_PAYLOAD}")
-                return True
+                return response
             else:
-                raise Exception(f"Error notifying webhook: status code {response.status_code}")
+                raise Exception(f"Failed to notify webhook. Status: {response.status_code}, Body: {response.text}")
+        
         except Exception as e:
             logger.error(f"Exception posting to webhook: {str(e)}")
             raise
+
+

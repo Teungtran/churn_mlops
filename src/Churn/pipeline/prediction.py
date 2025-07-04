@@ -19,24 +19,8 @@ import os
 import dagshub
 import tempfile
 import os
-web_hook_url = WebhookConfig().url
+import boto3
 
-async def send_webhook_payload(
-    message: str,
-    avg_confidence: Optional[float] = None,
-):
-    try:
-        logger.info("Preparing webhook notification")
-
-        payload = {
-            "message": message,
-            "avg_confidence": avg_confidence,
-        }
-
-        await post_to_webhook(web_hook_url, payload)
-
-    except Exception as e:
-        logger.error(f"Webhook notification failed with unexpected error: {str(e)}")
 class PredictionPipeline:
     def __init__(self, model_uri: str, scaler_uri: str,):
         pass
@@ -84,6 +68,36 @@ class PredictionPipeline:
         df_copy = df_features.copy()
         df_features_encode = get_dummies(df_copy)
         return df_features_encode
+    
+    def upload_to_s3(self, file_path):
+        """
+        Upload a file to S3 and return the public URL
+        """
+        try:
+            config = ConfigurationManager().get_cloud_storage_push_config()
+            bucket_name = config.bucket_name
+            region_name = config.region_name
+            
+            s3_client = boto3.client(
+                's3',
+                aws_access_key_id=config.aws_key_id,
+                aws_secret_access_key=config.aws_secret_key,
+                region_name=region_name
+            )
+            
+            timestamp = datetime.now().strftime('%Y%m%dT%H%M%S')
+            object_key = f"churn_data_store/prediction/prediction_{timestamp}.csv"
+            
+            s3_client.upload_file(file_path, bucket_name, object_key)
+            
+            url = f"https://{bucket_name}.s3.{region_name}.amazonaws.com/{object_key}"
+            logger.info(f"Successfully uploaded prediction results to S3: {url}")
+            
+            return url
+        except Exception as e:
+            logger.error(f"Failed to upload to S3: {e}")
+            raise
+    
     async def predict(self, reference_data: Optional[str] = None):
         try:
             start_time = time.time()
@@ -156,18 +170,26 @@ class PredictionPipeline:
                 counts = df_features['Churn_RATE'].value_counts()
                 count_churn = counts.get(1, 0)
                 count_not_churn = counts.get(0, 0)
+                
+                s3_url = None
+                prediction_csv_path = None
+                
                 try:
                     with tempfile.NamedTemporaryFile(suffix='.csv', delete=False) as temp_file:
                         prediction_csv_path = temp_file.name
                         df_features.to_csv(prediction_csv_path, index=False)
-                        mlflow.log_artifact(prediction_csv_path, "predictions")
-                        logger.info(f"Successfully saved prediction results to {prediction_csv_path} and logged as MLflow artifact")
+                        logger.info(f"Successfully saved prediction results to {prediction_csv_path}")
                     
+                    s3_url = self.upload_to_s3(prediction_csv_path)
+                    mlflow.set_tag("prediction_file", s3_url)
+                    logger.info(f"Uploaded prediction file to S3: {s3_url}")
+
                     os.remove(prediction_csv_path)
                     logger.info(f"Deleted temporary prediction file: {prediction_csv_path}")
 
                 except Exception as e:
                     logger.error(f"An error occurred during prediction saving or cleanup: {e}")
+
                 
                 try:    
                     sklearn_model = self.model._model_impl  
@@ -220,11 +242,8 @@ class PredictionPipeline:
                             f"✅ Average prediction confidence ({average_confidence:.2%}) is above the threshold "
                             f"of {CONFIDENCE_THRESHOLD:.2%}. No further action required."
                         )
-
-                    await send_webhook_payload(message=message, avg_confidence=average_confidence)
-
                 mlflow.log_text(message, "prediction_summary.txt")
-            return message
+            return message,  s3_url
 
         except Exception as e:
             raise RuntimeError(f"Prediction error: {e}")
@@ -234,16 +253,16 @@ async def run_prediction_task(
     model_version: str,
     scaler_version: str,
     run_id: str,
-    reference_data: Optional[str] = None
+    reference_data: Optional[str] = None,
 ):
     """
-    Background task to run prediction pipeline
+    Background task to run prediction pipeline and notify webhook.
     """
     try:
         model_uri = f"models:/RandomForestClassifier/{model_version}"
         scaler_uri = f"runs:/{run_id}/{scaler_version}"
         pipeline = PredictionPipeline(model_uri, scaler_uri)
-        message = await pipeline.predict(reference_data=reference_data) 
+        message, s3_url = await pipeline.predict(reference_data=reference_data)
 
         if os.path.exists(file_path):
             try:
@@ -251,12 +270,20 @@ async def run_prediction_task(
                 logger.info(f"Cleanup: Deleted input file {file_path}")
             except Exception as e:
                 logger.warning(f"Failed to delete input file during cleanup: {e}")
+        web_hook_url = WebhookConfig().url
+        webhook_payload = {
+            "message": message,
+            "prediction_url": s3_url,
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        logger.info(f"Sending webhook payload: {webhook_payload}")
+        await post_to_webhook(web_hook_url, webhook_payload)
 
-        return message
+        return message, s3_url
 
     except Exception as e:
         logger.error(f"Background prediction task error: {e}")
-        return f"Prediction error: {e}"
+        return f"Prediction error: {e}", None
 
 
 class ChurnController:
@@ -267,7 +294,7 @@ class ChurnController:
         model_version: str = Form(default="1"),
         scaler_version: str = Form(default="scaler_churn_version_20250701T105905.pkl"),
         run_id: str = Form(default="b523ba441ea0465085716dcebb916294"),
-        reference_data: Optional[str] = Form(default=None),
+        reference_data: Optional[str] = Form(default="s3://churndataversion/churn_data_store/data_version/features_data_version_20250704T005200.csv"),
     ):
         """
         Predict churn using uploaded file and dynamic model/scaler versions.
@@ -281,6 +308,7 @@ class ChurnController:
 
         try:
             await import_data(file)
+                
             background_tasks.add_task(
                 run_prediction_task,
                 file_path=input_file_path,
@@ -290,11 +318,9 @@ class ChurnController:
                 reference_data=reference_data
             )
             
-            message = "Prediction task started in background. Results will be saved to experiment 'Churn_model_prediction_cycle' in https://dagshub.com/Teungtran/churn_mlops.mlflow, check your webhook for status "
+            message = "Prediction task started in background. Results will be saved to experiment 'Churn_model_prediction_cycle' in https://dagshub.com/Teungtran/churn_mlops.mlflow and uploaded to S3. Check your webhook for status."
             
-            return {
-                "message": message
-            }
+            return {"message": message}
 
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e))
