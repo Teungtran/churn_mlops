@@ -1,4 +1,4 @@
-from fastapi import UploadFile, HTTPException,Form,BackgroundTasks
+from fastapi import UploadFile, HTTPException,Form
 from src.Churn.components.support import import_data,most_common,get_dummies
 from typing_extensions import Optional
 import pandas as pd
@@ -26,6 +26,9 @@ class PredictionPipeline:
         pass
     
         try:
+            config = ConfigurationManager().get_mlflow_config()
+            mlflow.set_tracking_uri(config.tracking_uri)
+            logger.info(f"MLflow tracking URI set to: {mlflow.get_tracking_uri()}")
             self.model = mlflow.pyfunc.load_model(model_uri)
             scaler_path = mlflow.artifacts.download_artifacts(artifact_uri=scaler_uri)
             self.scaler = joblib.load(scaler_path)
@@ -159,13 +162,11 @@ class PredictionPipeline:
                     logger.info(f"Dropping columns for prediction: {columns_to_drop}")
                     df_features_for_prediction.drop(columns=columns_to_drop, inplace=True)
                 
-                # Encode the features for prediction
                 df_encoded = self.encode_churn(df_features_for_prediction)
 
                 X = self.scaler.transform(df_encoded)
                 y_pred = self.model.predict(X)
                 
-                # Add predictions back to the original df_features
                 df_features['Churn_RATE'] = y_pred
                 counts = df_features['Churn_RATE'].value_counts()
                 count_churn = counts.get(1, 0)
@@ -243,6 +244,7 @@ class PredictionPipeline:
                             f"of {CONFIDENCE_THRESHOLD:.2%}. No further action required."
                         )
                 mlflow.log_text(message, "prediction_summary.txt")
+            
             return message,  s3_url
 
         except Exception as e:
@@ -270,31 +272,34 @@ async def run_prediction_task(
                 logger.info(f"Cleanup: Deleted input file {file_path}")
             except Exception as e:
                 logger.warning(f"Failed to delete input file during cleanup: {e}")
-        web_hook_url = WebhookConfig().url
-        webhook_payload = {
+        # web_hook_url = WebhookConfig().custom_url
+        payload = {
             "message": message,
             "prediction_url": s3_url,
             "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
-        logger.info(f"Sending webhook payload: {webhook_payload}")
-        await post_to_webhook(web_hook_url, webhook_payload)
+        # logger.info(f"Sending webhook payload: {webhook_payload}")
+        # await post_to_webhook(web_hook_url, payload)
 
-        return message, s3_url
+        return payload
 
     except Exception as e:
         logger.error(f"Background prediction task error: {e}")
-        return f"Prediction error: {e}", None
+        return {
+            "error": f"Prediction error: {e}",
+            "prediction_url": None,
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
 
 
 class ChurnController:
     @staticmethod
     async def predict_churn(
-        background_tasks: BackgroundTasks,
         file: UploadFile,
         model_version: str = Form(default="1"),
-        scaler_version: str = Form(default="scaler_churn_version_20250701T105905.pkl"),
-        run_id: str = Form(default="b523ba441ea0465085716dcebb916294"),
-        reference_data: Optional[str] = Form(default="s3://churndataversion/churn_data_store/data_version/features_data_version_20250704T005200.csv"),
+        scaler_version: str = Form(default="scaler/scaler_churn_version_20250705T001416.pkl"),
+        run_id: str = Form(default="1fef47d0e3fc4b40b3732437f41716ae"),
+        reference_data: Optional[str] = Form(default="s3://churndataversion/churn_data_store/data_version/features_data_version_20250704T155040.csv"),
     ):
         """
         Predict churn using uploaded file and dynamic model/scaler versions.
@@ -309,18 +314,15 @@ class ChurnController:
         try:
             await import_data(file)
                 
-            background_tasks.add_task(
-                run_prediction_task,
+            payload = await run_prediction_task(
                 file_path=input_file_path,
                 model_version=model_version,
                 scaler_version=scaler_version,
                 run_id=run_id,
                 reference_data=reference_data
             )
-            
-            message = "Prediction task started in background. Results will be saved to experiment 'Churn_model_prediction_cycle' in https://dagshub.com/Teungtran/churn_mlops.mlflow and uploaded to S3. Check your webhook for status."
-            
-            return {"message": message}
+
+            return payload
 
         except RuntimeError as e:
             raise HTTPException(status_code=400, detail=str(e))

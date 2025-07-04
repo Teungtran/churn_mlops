@@ -59,7 +59,7 @@ class PrepareBaseModel:
         base_model_path = os.path.join(self.config.model_version_dir, f"base_model_churn_{self.datetime_suffix}.pkl")
         jb.dump(model, base_model_path)
         logger.info(f"Base model saved: {base_model_path}")
-        mlflow.log_artifact(str(scaler_path))
-        mlflow.log_artifact(str(base_model_path))
+        mlflow.log_artifact(str(scaler_path), artifact_path="scaler")
+        mlflow.log_artifact(str(base_model_path), artifact_path="base_model")
         return model, base_model_path, scaler_path, X_train_scaled, X_test_scaled
         

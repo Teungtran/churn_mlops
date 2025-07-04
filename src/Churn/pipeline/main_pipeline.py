@@ -65,26 +65,44 @@ class WorkflowRunner:
                     raise
             else:
                 raise ValueError("No data file found and no uploaded file provided. Please provide a data file.")
-
-        # Stage 1: Data Preparation
-        logger.info("=" * 50)
-        logger.info("STAGE 1: Data Preparation")
-        logger.info("=" * 50)
-        
-        data_prep = DataPreparationPipeline()
-        X_train, X_test, y_train, y_test, _, _ = data_prep.main()
-        
-        logger.info("Data preparation completed successfully")
-
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_name = f"Churn_model_training_cycle_{timestamp}"
-        
         with mlflow.start_run(run_name=run_name):
+            
+            logger.info("=" * 50)
+            logger.info("STAGE 1: Data Preparation")
+            logger.info("=" * 50)
+            
+            data_prep = DataPreparationPipeline()
+            X_train, X_test, y_train, y_test, df_processed, df, df_features = data_prep.main()
+            
+            logger.info("Data preparation completed successfully")
+
+            # Log raw dataframe
+            raw_dataset = mlflow.data.from_pandas(
+                df=df,
+                name="churn-prediction-raw-training-data",
+                targets="Churn"
+            )
+            mlflow.log_input(raw_dataset, context="train_data_raw")
+
+            feature_dataset = mlflow.data.from_pandas(
+                df=df_features,
+                name="churn-prediction-feature-data",
+                targets="Churn"
+            )
+            mlflow.log_input(feature_dataset, context="train_data_features")
+            
+            encode_dataset = mlflow.data.from_pandas(
+                df=df_processed,
+                name="churn-prediction-training-data-encoded",
+                targets="Churn"
+            )
+            mlflow.log_input(encode_dataset, context="train_data_encoded")
             logger.info("=" * 50)
             logger.info("STAGE 2: Model Preparation")
             logger.info("=" * 50)
             
-            # Pass mlflow_config even though we're using hardcoded experiment name
             mlflow_config = self.config_manager.get_mlflow_config()
             model_prep = ModelPreparationPipeline(mlflow_config=mlflow_config)
             model, base_model_path, scaler_path, X_train_scaled, X_test_scaled = model_prep.main(

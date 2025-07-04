@@ -165,4 +165,4 @@ class DataIngestion:
         
         logger.info("Data ingestion completed successfully")
         logger.info(f"Data shape - Train: {X_train.shape}, Test: {X_test.shape}")
-        return X_train, X_test, y_train, y_test, df_processed, df
+        return X_train, X_test, y_train, y_test, df_processed, df, df_features

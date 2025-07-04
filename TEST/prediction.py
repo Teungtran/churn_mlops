@@ -1,6 +1,6 @@
 from fastapi import APIRouter, File, UploadFile, Form, BackgroundTasks
 from pydantic import BaseModel
-from src.Churn.pipeline.prediction import ChurnController
+from TEST.prediction import ChurnController
 from typing_extensions import Optional
 router = APIRouter(
     prefix="/churn",

@@ -34,7 +34,7 @@ class CloudConfig(BaseModel):
 
 class WebhookConfig(BaseSettings):
     url: str = Field(..., env="WEB_HOOK")
-
+    custom_url: str = Field(..., env="WEB_HOOK_CUSTOME")
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
