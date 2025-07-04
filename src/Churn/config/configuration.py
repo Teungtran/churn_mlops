@@ -1,10 +1,8 @@
 from src.Churn.utils.common import read_yaml, create_directories
 from src.Churn.utils.logging import logger
 from pydantic import BaseModel, Field
-from langchain_core.utils import from_env
 from dotenv import load_dotenv
-from datetime import datetime
-import uuid
+import os
 
 from src.Churn.entity.config_entity import (
     DataIngestionConfig,
@@ -27,11 +25,13 @@ def ensure_env_loaded():
         _env_loaded = True
         
 class CloudConfig(BaseModel):
-    aws_access_key_id: str = Field(default_factory=lambda: (ensure_env_loaded(), from_env("AWS_ACCESS_KEY_ID")())[1])
-    aws_secret_access_key: str = Field(default_factory=lambda: (ensure_env_loaded(), from_env("AWS_SECRET_ACCESS_KEY")())[1])
-    region_name: str = Field(default_factory=lambda: (ensure_env_loaded(), from_env("AWS_REGION")())[1])
+    aws_access_key_id: str = Field(default_factory=lambda: (ensure_env_loaded(), os.getenv("AWS_ACCESS_KEY_ID"))[1])
+    aws_secret_access_key: str = Field(default_factory=lambda: (ensure_env_loaded(), os.getenv("AWS_SECRET_ACCESS_KEY"))[1])
+    region_name: str = Field(default_factory=lambda: (ensure_env_loaded(), os.getenv("AWS_REGION"))[1])
+
+
 class WebhookConfig(BaseModel):
-    url: str = Field(default_factory=lambda: (ensure_env_loaded(), from_env("WEB_HOOK")())[1])
+    url: str = Field(default_factory=lambda: (ensure_env_loaded(), os.getenv("WEB_HOOK"))[1])
 
     
 class ConfigurationManager:
